@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -24,6 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CFG_PATH = ROOT / "packaging.json"
 WORK_ROOT = Path(__file__).resolve().parent / ".work"
+IS_MACOS = sys.platform == "darwin"
+IS_WINDOWS = os.name == "nt"
+IS_WINDOWS = os.name == "nt"
 
 
 class PackagingError(RuntimeError):
@@ -91,6 +95,89 @@ def sanitize_identifier(text: str | None, fallback: str) -> str:
     return cleaned or fallback
 
 
+def ensure_bundle_identifier(cfg: dict, updates: list[str]) -> None:
+    if cfg.get("BundleIdentifier"):
+        return
+
+    project_rel = cfg.get("Project")
+    default_product = ""
+    if project_rel:
+        default_product = Path(project_rel).stem
+    else:
+        project = first_csproj()
+        if project:
+            default_product = project.stem
+    if not default_product:
+        default_product = "app"
+
+    base_product = cfg.get("ProductName") or default_product
+    company_slug = sanitize_identifier(cfg.get("CompanyName"), "example")
+    product_slug = sanitize_identifier(base_product, default_product.lower())
+    cfg["BundleIdentifier"] = f"com.{company_slug}.{product_slug}"
+    updates.append("Added default BundleIdentifier")
+
+
+def mac_defaults(cfg: dict) -> dict:
+    project_rel = cfg.get("Project", "")
+    project_path: Path | None = None
+    if project_rel:
+        project_path = (ROOT / project_rel).resolve()
+    else:
+        project_path = first_csproj()
+        if project_path:
+            try:
+                cfg["Project"] = project_path.relative_to(ROOT).as_posix()
+            except ValueError:
+                cfg["Project"] = project_path.as_posix()
+    exe_name = Path(cfg.get("Project", "")).stem or (cfg.get("ProductName") or "app")
+
+    icon_rel = ""
+    if project_path and project_path.exists():
+        icon_path = project_path.parent / "Assets" / "app.icns"
+        if icon_path.exists():
+            try:
+                icon_rel = icon_path.relative_to(ROOT).as_posix()
+            except ValueError:
+                icon_rel = icon_path.as_posix()
+
+    return {
+        "Executable": exe_name,
+        "RuntimeIdentifiers": ["osx-arm64", "osx-x64"],
+        "IconIcns": icon_rel,
+        "InfoPlist": "Installer/templates/Info.plist",
+        "BundleIdentifier": cfg.get("BundleIdentifier"),
+        "VolumeName": cfg.get("ProductName") or exe_name,
+    }
+
+
+def ensure_mac_section(cfg: dict, updates: list[str]) -> None:
+    mac_cfg = cfg.get("Mac")
+    if mac_cfg is None and "Mac" in cfg:
+        return
+    if "Mac" not in cfg:
+        cfg["Mac"] = mac_defaults(cfg)
+        updates.append("Added default Mac packaging section")
+        return
+
+    updated = False
+    mac_cfg = cfg["Mac"] or {}
+    if "RuntimeIdentifiers" not in mac_cfg or not mac_cfg.get("RuntimeIdentifiers"):
+        mac_cfg["RuntimeIdentifiers"] = ["osx-arm64", "osx-x64"]
+        updated = True
+    if not mac_cfg.get("InfoPlist"):
+        mac_cfg["InfoPlist"] = "Installer/templates/Info.plist"
+        updated = True
+    if not mac_cfg.get("BundleIdentifier"):
+        mac_cfg["BundleIdentifier"] = cfg.get("BundleIdentifier")
+        updated = True
+    if not mac_cfg.get("VolumeName"):
+        mac_cfg["VolumeName"] = cfg.get("ProductName") or mac_cfg.get("Executable") or "App"
+        updated = True
+    if updated:
+        cfg["Mac"] = mac_cfg
+        updates.append("Normalised Mac packaging settings")
+
+
 def default_cfg() -> dict:
     project = first_csproj()
     if not project:
@@ -100,14 +187,16 @@ def default_cfg() -> dict:
     proj_rel = project.relative_to(ROOT).as_posix()
     proj_dir = project.parent
     ico = proj_dir / "Assets" / "app.ico"
+    icns = proj_dir / "Assets" / "app.icns"
     generated_guid = str(uuid.uuid4()).upper()
     company_slug = sanitize_identifier(meta.get("CompanyName"), "example")
     product_slug = sanitize_identifier(meta.get("ProductName") or project.stem, project.stem.lower())
+    bundle_id = f"com.{company_slug}.{product_slug}"
 
     cfg = {
         "ProductName": meta.get("ProductName", project.stem),
         "CompanyName": meta.get("CompanyName", ""),
-        "BundleIdentifier": f"com.{company_slug}.{product_slug}",
+        "BundleIdentifier": bundle_id,
         "Project": proj_rel,
         "Win": {
             "Executable": f"{project.stem}.exe",
@@ -115,6 +204,15 @@ def default_cfg() -> dict:
             "IconIco": (ico.relative_to(ROOT).as_posix() if ico.exists() else ""),
             "GUID": f"{{{generated_guid}}}",
             "PublisherUrl": "",
+            "RuntimeIdentifier": "win-x64",
+        },
+        "Mac": {
+            "Executable": project.stem,
+            "RuntimeIdentifiers": ["osx-arm64", "osx-x64"],
+            "IconIcns": (icns.relative_to(ROOT).as_posix() if icns.exists() else ""),
+            "InfoPlist": "Installer/templates/Info.plist",
+            "BundleIdentifier": bundle_id,
+            "VolumeName": meta.get("ProductName", project.stem),
         },
     }
     if "Version" in meta:
@@ -135,6 +233,16 @@ def ensure_cfg() -> tuple[dict, bool]:
                     fh.write("\n")
             else:
                 raise PackagingError("Unexpected packaging.json structure.")
+        updates: list[str] = []
+        ensure_bundle_identifier(data, updates)
+        ensure_mac_section(data, updates)
+        if updates:
+            with CFG_PATH.open("w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+                fh.write("\n")
+            log("[config] Updated packaging.json:")
+            for item in updates:
+                log(f"         - {item}")
         return data, False
 
     cfg = default_cfg()
@@ -218,7 +326,7 @@ def locate_inno_compiler(win_cfg: dict) -> str:
     )
 
 
-def replace_tokens(template: Path, tokens: dict[str, str], work_dir: Path) -> Path:
+def replace_tokens(template: Path, tokens: dict[str, str], work_dir: Path, output_name: str = "inno_generated.iss") -> Path:
     text = template.read_text(encoding="utf-8")
     for key, value in tokens.items():
         text = text.replace(f"{{{{{key}}}}}", value)
@@ -226,12 +334,12 @@ def replace_tokens(template: Path, tokens: dict[str, str], work_dir: Path) -> Pa
     if leftover:
         unique = ", ".join(sorted(set(leftover)))
         raise PackagingError(f"Unreplaced tokens remain in Inno template: {unique}.")
-    output = work_dir / "inno_generated.iss"
+    output = work_dir / output_name
     output.write_text(text, encoding="utf-8")
     return output
 
 
-def package_windows(cfg: dict, publish_dir: Path, version: str) -> None:
+def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
     win_cfg = cfg.get("Win") or {}
     exe_name = win_cfg.get("Executable")
     if not exe_name:
@@ -264,7 +372,7 @@ def package_windows(cfg: dict, publish_dir: Path, version: str) -> None:
         shutil.rmtree(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    output_base = f"{cfg['ProductName']}-{version}-win-x64"
+    output_base = f"{cfg['ProductName']}-{version}-{rid}"
     tokens = {
         "ProductName": cfg["ProductName"],
         "CompanyName": cfg.get("CompanyName", ""),
@@ -291,15 +399,193 @@ def package_windows(cfg: dict, publish_dir: Path, version: str) -> None:
     log(f"[win] Installer written to {dist_dir}")
 
 
+def copy_publish_tree(src: Path, dest: Path) -> None:
+    for item in src.iterdir():
+        target = dest / item.name
+        if item.is_dir():
+            shutil.copytree(item, target, symlinks=True)
+        else:
+            shutil.copy2(item, target)
+
+
+def ensure_executable(path: Path) -> None:
+    try:
+        mode = path.stat().st_mode
+    except FileNotFoundError as exc:
+        raise PackagingError(f"Expected executable not found: {path}") from exc
+    if mode & stat.S_IXUSR:
+        return
+    path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def normalize_runtime_identifiers(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    raise PackagingError("Runtime identifiers must be a string or list of strings.")
+
+
+def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
+    if not IS_MACOS:
+        raise PackagingError("macOS packaging requires running on macOS.")
+
+    mac_cfg = cfg.get("Mac") or {}
+    exe_name = mac_cfg.get("Executable") or Path(cfg["Project"]).stem
+    app_name = mac_cfg.get("AppName") or cfg["ProductName"]
+    bundle_identifier = mac_cfg.get("BundleIdentifier") or cfg.get("BundleIdentifier")
+    if not bundle_identifier:
+        raise PackagingError("Bundle identifier missing; set BundleIdentifier or Mac.BundleIdentifier.")
+
+    info_plist_template = ROOT / mac_cfg.get("InfoPlist", "Installer/templates/Info.plist")
+    if not info_plist_template.exists():
+        raise PackagingError(f"Info.plist template missing: {info_plist_template}")
+
+    icon_rel = mac_cfg.get("IconIcns", "")
+    icon_path = ROOT / icon_rel if icon_rel else None
+    default_icon_path: Path | None = None
+    project_rel = cfg.get("Project")
+    if project_rel:
+        project_path = (ROOT / project_rel).resolve()
+        default_icon_path = project_path.parent / "Assets" / "app.icns"
+
+    dist_dir = ROOT / "dist" / "mac"
+    dist_dir.mkdir(parents=True, exist_ok=True)
+
+    work_dir = WORK_ROOT / f"mac-{rid}"
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    bundle_root = work_dir / f"{app_name}.app"
+    contents_dir = bundle_root / "Contents"
+    macos_dir = contents_dir / "MacOS"
+    resources_dir = contents_dir / "Resources"
+    macos_dir.mkdir(parents=True, exist_ok=True)
+    resources_dir.mkdir(parents=True, exist_ok=True)
+
+    copy_publish_tree(publish_dir, macos_dir)
+
+    exe_path = macos_dir / exe_name
+    if not exe_path.exists():
+        raise PackagingError(
+            f"Published executable not found for macOS build: {exe_path}. "
+            "Ensure PublishArgs enable a self-contained build."
+        )
+    ensure_executable(exe_path)
+
+    icon_token = ""
+    icon_candidates: list[Path] = []
+    if icon_path:
+        icon_candidates.append(icon_path)
+    if default_icon_path:
+        icon_candidates.append(default_icon_path)
+
+    icon_source: Path | None = None
+    for candidate in icon_candidates:
+        if candidate and candidate.exists():
+            icon_source = candidate
+            break
+
+    if icon_source:
+        icon_dest = resources_dir / icon_source.name
+        shutil.copy2(icon_source, icon_dest)
+        icon_token = icon_dest.stem
+    else:
+        if icon_path:
+            log(
+                f"[warn] macOS icon not found at {icon_path} - app bundle will use default."
+            )
+        elif default_icon_path:
+            log(
+                f"[warn] macOS icon not found at {default_icon_path} - add an .icns file or set Mac.IconIcns."
+            )
+
+    tokens = {
+        "ProductName": cfg["ProductName"],
+        "BundleIdentifier": bundle_identifier,
+        "Version": version,
+        "Executable": exe_name,
+        "IconFile": icon_token,
+        "Category": mac_cfg.get("Category", ""),
+        "MinimumSystemVersion": mac_cfg.get("MinimumSystemVersion", "11.0"),
+        "Copyright": cfg.get("CompanyName", ""),
+        "PublisherUrl": mac_cfg.get("PublisherUrl", ""),
+    }
+
+    info_plist_generated = replace_tokens(info_plist_template, tokens, work_dir, output_name="Info.plist")
+    contents_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(info_plist_generated, contents_dir / "Info.plist")
+    (contents_dir / "PkgInfo").write_text("APPL????", encoding="utf-8")
+
+    staging_dir = work_dir / "dmg"
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(bundle_root, staging_dir / bundle_root.name)
+
+    applications_link = staging_dir / "Applications"
+    if applications_link.exists() or applications_link.is_symlink():
+        applications_link.unlink()
+    applications_link.symlink_to("/Applications")
+
+    volname = mac_cfg.get("VolumeName") or app_name
+    dmg_name = f"{cfg['ProductName']}-{version}-{rid}.dmg"
+    dmg_path = dist_dir / dmg_name
+    if dmg_path.exists():
+        dmg_path.unlink()
+
+    sh(
+        [
+            "hdiutil",
+            "create",
+            "-fs",
+            "HFS+",
+            "-srcfolder",
+            str(staging_dir),
+            "-volname",
+            volname,
+            "-ov",
+            "-format",
+            "UDZO",
+            str(dmg_path),
+        ]
+    )
+
+    log(f"[mac] Disk image ({rid}) written to {dmg_path}")
+
+
 def main() -> None:
     cfg, created = ensure_cfg()
     if created and len(sys.argv) == 1:
         return
 
     WORK_ROOT.mkdir(parents=True, exist_ok=True)
-    rid = "win-x64"
-    publish_dir, version = publish_project(cfg, rid)
-    package_windows(cfg, publish_dir, version)
+    any_packaged = False
+
+    win_cfg = cfg.get("Win")
+    if win_cfg and IS_WINDOWS:
+        win_rid = win_cfg.get("RuntimeIdentifier", "win-x64")
+        publish_dir, version = publish_project(cfg, win_rid)
+        package_windows(cfg, publish_dir, version, win_rid)
+        any_packaged = True
+
+    mac_cfg = cfg.get("Mac")
+    if mac_cfg:
+        if not IS_MACOS:
+            log("[mac] Skipping macOS packaging; requires running on macOS.")
+        else:
+            runtime_ids = mac_cfg.get("RuntimeIdentifiers", ["osx-arm64", "osx-x64"])
+            runtime_ids = normalize_runtime_identifiers(runtime_ids)
+            if not runtime_ids:
+                raise PackagingError("Mac.RuntimeIdentifiers is empty.")
+            for mac_rid in runtime_ids:
+                publish_dir, version = publish_project(cfg, mac_rid)
+                package_macos(cfg, publish_dir, version, mac_rid)
+            any_packaged = True
+
+    if not any_packaged:
+        log("No packaging targets were executed. Enable Win or Mac sections in packaging.json.")
 
 
 if __name__ == "__main__":

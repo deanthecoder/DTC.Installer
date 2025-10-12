@@ -10,6 +10,7 @@ Works seamlessly as a Git submodule or standalone folder inside your project.
 * **Python 3.9+**
 * **Inno Setup 6** (standard install makes `ISCC.exe` available on PATH)
 * **.NET SDK** matching your target project (used by `dotnet publish`)
+* **macOS tooling:** DMG generation runs on macOS and uses the built-in `hdiutil` command
 
 ## Quick Start
 
@@ -37,7 +38,7 @@ Works seamlessly as a Git submodule or standalone folder inside your project.
    python Installer/pack.py
    ```
 
-5. Retrieve the generated installer from `dist/win/`.
+5. Retrieve the generated installer(s) from `dist/win/` and `dist/mac/` (for macOS builds).
    To include version tags in the filename, tag your repo before building:
 
    ```bash
@@ -53,4 +54,12 @@ Re-run step 4 any time you need a new build — existing configuration will be r
 * **Auto-icon detection:**
   The script can automatically locate your app’s icon at `Assets/app.ico` (and `app.icns` on macOS), warning if missing.
 * **Cross-platform ready:**
-  Windows packaging uses Inno Setup; macOS and Linux support are planned.
+  Windows installers use Inno Setup; macOS drag-and-drop DMGs are generated automatically, and Linux support is planned.
+
+### macOS Packaging
+
+The generated `packaging.json` includes a `Mac` section with sensible defaults:
+
+- Builds both Apple Silicon (`osx-arm64`) and Intel (`osx-x64`) runtimes.
+- Produces drag-and-drop `.dmg` files under `dist/mac/`, each containing the app bundle and an `Applications` shortcut.
+- Uses `Installer/templates/Info.plist` as the bundle manifest; customise icons, identifiers, or metadata by editing the `Mac` section.
