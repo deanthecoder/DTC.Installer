@@ -27,7 +27,6 @@ CFG_PATH = ROOT / "packaging.json"
 WORK_ROOT = Path(__file__).resolve().parent / ".work"
 IS_MACOS = sys.platform == "darwin"
 IS_WINDOWS = os.name == "nt"
-IS_WINDOWS = os.name == "nt"
 
 
 class PackagingError(RuntimeError):
@@ -129,7 +128,7 @@ def mac_defaults(cfg: dict) -> dict:
                 cfg["Project"] = project_path.relative_to(ROOT).as_posix()
             except ValueError:
                 cfg["Project"] = project_path.as_posix()
-    exe_name = Path(cfg.get("Project", "")).stem or (cfg.get("ProductName") or "app")
+    exe_name = cfg.get("Executable") or Path(cfg.get("Project", "")).stem or (cfg.get("ProductName") or "app")
 
     icon_rel = ""
     if project_path and project_path.exists():
@@ -141,11 +140,9 @@ def mac_defaults(cfg: dict) -> dict:
                 icon_rel = icon_path.as_posix()
 
     return {
-        "Executable": exe_name,
         "RuntimeIdentifiers": ["osx-arm64", "osx-x64"],
         "IconIcns": icon_rel,
         "InfoPlist": "Installer/templates/Info.plist",
-        "BundleIdentifier": cfg.get("BundleIdentifier"),
         "VolumeName": cfg.get("ProductName") or exe_name,
     }
 
@@ -161,14 +158,14 @@ def ensure_mac_section(cfg: dict, updates: list[str]) -> None:
 
     updated = False
     mac_cfg = cfg["Mac"] or {}
+    if not mac_cfg.get("Executable") and cfg.get("Executable"):
+        mac_cfg["Executable"] = cfg.get("Executable")
+        updated = True
     if "RuntimeIdentifiers" not in mac_cfg or not mac_cfg.get("RuntimeIdentifiers"):
         mac_cfg["RuntimeIdentifiers"] = ["osx-arm64", "osx-x64"]
         updated = True
     if not mac_cfg.get("InfoPlist"):
         mac_cfg["InfoPlist"] = "Installer/templates/Info.plist"
-        updated = True
-    if not mac_cfg.get("BundleIdentifier"):
-        mac_cfg["BundleIdentifier"] = cfg.get("BundleIdentifier")
         updated = True
     if not mac_cfg.get("VolumeName"):
         mac_cfg["VolumeName"] = cfg.get("ProductName") or mac_cfg.get("Executable") or "App"
@@ -196,10 +193,11 @@ def default_cfg() -> dict:
     cfg = {
         "ProductName": meta.get("ProductName", project.stem),
         "CompanyName": meta.get("CompanyName", ""),
+        "PublisherUrl": "",
         "BundleIdentifier": bundle_id,
+        "Executable": project.stem,
         "Project": proj_rel,
         "Win": {
-            "Executable": f"{project.stem}.exe",
             "InnoScript": "Installer/templates/inno.iss",
             "IconIco": (ico.relative_to(ROOT).as_posix() if ico.exists() else ""),
             "GUID": f"{{{generated_guid}}}",
@@ -207,11 +205,9 @@ def default_cfg() -> dict:
             "RuntimeIdentifier": "win-x64",
         },
         "Mac": {
-            "Executable": project.stem,
             "RuntimeIdentifiers": ["osx-arm64", "osx-x64"],
             "IconIcns": (icns.relative_to(ROOT).as_posix() if icns.exists() else ""),
             "InfoPlist": "Installer/templates/Info.plist",
-            "BundleIdentifier": bundle_id,
             "VolumeName": meta.get("ProductName", project.stem),
         },
     }
@@ -341,9 +337,11 @@ def replace_tokens(template: Path, tokens: dict[str, str], work_dir: Path, outpu
 
 def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
     win_cfg = cfg.get("Win") or {}
-    exe_name = win_cfg.get("Executable")
+    exe_name = win_cfg.get("Executable") or cfg.get("Executable")
     if not exe_name:
         raise PackagingError("Win.Executable missing from packaging.json")
+    if not exe_name.lower().endswith(".exe"):
+        exe_name = f"{exe_name}.exe"
     exe_path = publish_dir / exe_name
     if not exe_path.exists():
         raise PackagingError(f"Published executable not found: {exe_path}")
@@ -376,7 +374,7 @@ def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> Non
     tokens = {
         "ProductName": cfg["ProductName"],
         "CompanyName": cfg.get("CompanyName", ""),
-        "PublisherUrl": win_cfg.get("PublisherUrl", ""),
+        "PublisherUrl": win_cfg.get("PublisherUrl") or cfg.get("PublisherUrl", ""),
         "Version": version,
         "Executable": exe_name,
         "AppId": app_id,
@@ -433,7 +431,9 @@ def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
         raise PackagingError("macOS packaging requires running on macOS.")
 
     mac_cfg = cfg.get("Mac") or {}
-    exe_name = mac_cfg.get("Executable") or Path(cfg["Project"]).stem
+    exe_name = mac_cfg.get("Executable") or cfg.get("Executable") or Path(cfg["Project"]).stem
+    if exe_name.lower().endswith(".exe"):
+        exe_name = exe_name[:-4]
     app_name = mac_cfg.get("AppName") or cfg["ProductName"]
     bundle_identifier = mac_cfg.get("BundleIdentifier") or cfg.get("BundleIdentifier")
     if not bundle_identifier:
@@ -510,7 +510,7 @@ def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
         "Category": mac_cfg.get("Category", ""),
         "MinimumSystemVersion": mac_cfg.get("MinimumSystemVersion", "11.0"),
         "Copyright": cfg.get("CompanyName", ""),
-        "PublisherUrl": mac_cfg.get("PublisherUrl", ""),
+        "PublisherUrl": mac_cfg.get("PublisherUrl") or cfg.get("PublisherUrl", ""),
     }
 
     info_plist_generated = replace_tokens(info_plist_template, tokens, work_dir, output_name="Info.plist")

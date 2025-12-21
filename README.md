@@ -30,7 +30,7 @@ Works seamlessly as a Git submodule or standalone folder inside your project.
 
    The first run generates a `packaging.json` configuration and exits.
 
-3. Edit `packaging.json` to verify or adjust details such as product name, company, and project path.
+3. Edit `packaging.json` to verify or adjust details such as product name, company, executable name, and project path.
 
 4. Run the same command again to build and package your app:
 
@@ -55,6 +55,24 @@ Re-run step 4 any time you need a new build — existing configuration will be r
   The script can automatically locate your app’s icon at `Assets/app.ico` (and `app.icns` on macOS), warning if missing.
 * **Cross-platform ready:**
   Windows installers use Inno Setup; macOS drag-and-drop DMGs are generated automatically, and Linux support is planned.
+
+### Executable name
+
+You can specify a top-level `Executable` (without `.exe`) to avoid repeating it in each platform section:
+
+```json
+{
+  "Executable": "MyApp",
+  "Win": {
+    "Executable": "MyApp.exe"
+  },
+  "Mac": {
+    "Executable": "MyApp"
+  }
+}
+```
+
+If you omit the per‑platform values, Windows packaging appends `.exe` automatically and macOS strips it if present.
 
 ### macOS Packaging
 
