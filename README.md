@@ -1,83 +1,177 @@
-[![Twitter URL](https://img.shields.io/twitter/url/https/twitter.com/deanthecoder.svg?style=social\&label=Follow%20%40deanthecoder)](https://twitter.com/deanthecoder)
+[![Twitter URL](https://img.shields.io/twitter/url/https/twitter.com/deanthecoder.svg?style=social&label=Follow%20%40deanthecoder)](https://twitter.com/deanthecoder)
 
 # DTC.Installer
 
-A cross-platform Python script for packaging .NET applications with a single command.
-Works seamlessly as a Git submodule or standalone folder inside your project.
+**DTC.Installer** is a cross‑platform packaging helper for .NET applications.
+It is designed to live *inside* your repo (often as a Git submodule) and give you
+a single, repeatable command to produce installable artifacts for Windows and macOS.
+
+The goal is not to replace platform‑native tooling, but to *orchestrate it consistently*
+with minimal configuration and sensible defaults.
+
+---
+
+## What it does
+
+At a high level, the tool:
+
+- Locates your `.csproj` automatically (or uses an explicit path if provided)
+- Runs `dotnet publish` with the correct runtime(s)
+- Generates installers using platform‑native tools
+- Produces clean, versioned output in a predictable `dist/` layout
+- Persists all configuration in a single `packaging.json` file
+
+Once configured, packaging your app is a **one‑command operation**.
+
+---
+
+## Supported platforms
+
+### Windows
+- Uses **Inno Setup 6** (`ISCC.exe`) to build a `.exe` installer
+- Handles versioning, icons, metadata, and install layout
+- Automatically appends `.exe` where required
+
+### macOS
+- Builds **both Apple Silicon and Intel** runtimes by default
+- Produces drag‑and‑drop **`.dmg` installers**
+- Generates a proper `.app` bundle with `Info.plist`
+- Automatically creates a bundle identifier if missing
+- Includes an `Applications` shortcut inside the DMG
+
+(Linux support is intentionally deferred but the structure allows it to be added cleanly.)
+
+---
 
 ## Requirements
 
-* **Python 3.9+**
-* **Inno Setup 6** (standard install makes `ISCC.exe` available on PATH)
-* **.NET SDK** matching your target project (used by `dotnet publish`)
-* **macOS tooling:** DMG generation runs on macOS and uses the built-in `hdiutil` command
+- **Python 3.9+**
+- **.NET SDK** matching your target project
+- **Inno Setup 6** (Windows packaging only)
+- **macOS:** built‑in `hdiutil` (no extra installs required)
 
-## Quick Start
+---
 
-1. Add this repository as a submodule in your .NET project:
+## Quick start
+
+1. Add the installer to your repo (recommended as a submodule):
 
    ```bash
    git submodule add https://github.com/deanthecoder/DTC.Installer.git Installer
    ```
 
-   *(Alternatively, copy the files manually into an `Installer/` folder.)*
+   *(Or copy it directly into an `Installer/` folder.)*
 
-2. From the app root, run:
-
-   ```bash
-   python Installer/pack.py
-   ```
-
-   The first run generates a `packaging.json` configuration and exits.
-
-3. Edit `packaging.json` to verify or adjust details such as product name, company, executable name, and project path.
-
-4. Run the same command again to build and package your app:
+2. From your repo root, run:
 
    ```bash
    python Installer/pack.py
    ```
 
-5. Retrieve the generated installer(s) from `dist/win/` and `dist/mac/` (for macOS builds).
-   To include version tags in the filename, tag your repo before building:
+3. On first run, the script:
+   - Scans for a `.csproj`
+   - Infers sensible defaults (product name, company, bundle ID, etc.)
+   - Writes a `packaging.json`
+   - Exits without building
+
+4. Review and tweak `packaging.json` as needed.
+
+5. Run the same command again to build installers:
 
    ```bash
-   git tag v1.0.0
+   python Installer/pack.py
    ```
-
-Re-run step 4 any time you need a new build — existing configuration will be reused.
 
 ---
 
-### Optional Enhancements
+## Configuration: `packaging.json`
 
-* **Auto-icon detection:**
-  The script can automatically locate your app’s icon at `Assets/app.ico` (and `app.icns` on macOS), warning if missing.
-* **Cross-platform ready:**
-  Windows installers use Inno Setup; macOS drag-and-drop DMGs are generated automatically, and Linux support is planned.
+All behaviour is driven by a single config file.
 
-### Executable name
+### Common fields
 
-You can specify a top-level `Executable` (without `.exe`) to avoid repeating it in each platform section:
+- `Product` – Display name of the application
+- `Company` – Company / publisher name
+- `Project` – Relative path to the `.csproj` (optional if auto‑detected)
+- `Executable` – Base executable name (without `.exe`)
+- `Version` – Optional override; otherwise inferred from Git tags
+
+### Windows section
 
 ```json
-{
-  "Executable": "MyApp",
-  "Win": {
-    "Executable": "MyApp.exe"
-  },
-  "Mac": {
-    "Executable": "MyApp"
-  }
+"Win": {
+  "Icon": "Assets/app.ico",
+  "Publisher": "My Company Ltd"
 }
 ```
 
-If you omit the per‑platform values, Windows packaging appends `.exe` automatically and macOS strips it if present.
+- `.exe` is added automatically if omitted
+- Missing icons generate warnings, not hard failures
 
-### macOS Packaging
+### macOS section
 
-The generated `packaging.json` includes a `Mac` section with sensible defaults:
+```json
+"Mac": {
+  "Icon": "Assets/app.icns",
+  "BundleIdentifier": "com.mycompany.myapp"
+}
+```
 
-- Builds both Apple Silicon (`osx-arm64`) and Intel (`osx-x64`) runtimes.
-- Produces drag-and-drop `.dmg` files under `dist/mac/`, each containing the app bundle and an `Applications` shortcut.
-- Uses `Installer/templates/Info.plist` as the bundle manifest; customise icons, identifiers, or metadata by editing the `Mac` section.
+Defaults applied automatically if fields are missing:
+
+- `BundleIdentifier` → derived from Company + Product
+- Runtime targets → `osx-arm64` and `osx-x64`
+- `Info.plist` → generated from template
+
+---
+
+## Output layout
+
+Generated files are written to:
+
+```
+dist/
+ ├─ win/
+ │   └─ MyApp‑Setup‑1.2.0.exe
+ └─ mac/
+     ├─ MyApp‑1.2.0‑arm64.dmg
+     └─ MyApp‑1.2.0‑x64.dmg
+```
+
+Version numbers are taken from the nearest Git tag:
+
+```bash
+git tag v1.2.0
+```
+
+If no tag is present, a safe fallback version is used.
+
+---
+
+## Design notes
+
+- **Idempotent:** Re‑running the script reuses existing configuration
+- **Submodule‑friendly:** No global installs, no repo pollution
+- **Fail‑soft:** Missing optional assets emit warnings, not crashes
+- **Explicit over magic:** Defaults are written into `packaging.json`, not hidden
+
+---
+
+## Typical workflow
+
+```bash
+# once
+python Installer/pack.py
+# edit packaging.json
+
+# every release
+git tag v1.3.0
+python Installer/pack.py
+```
+
+That’s it.
+
+---
+
+## License
+See [LICENSE](LICENSE) for details.

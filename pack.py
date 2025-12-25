@@ -27,6 +27,7 @@ CFG_PATH = ROOT / "packaging.json"
 WORK_ROOT = Path(__file__).resolve().parent / ".work"
 IS_MACOS = sys.platform == "darwin"
 IS_WINDOWS = os.name == "nt"
+DEFAULT_VERSION = "0.1"
 
 
 class PackagingError(RuntimeError):
@@ -86,6 +87,15 @@ def read_csproj_metadata(project: Path) -> dict[str, str]:
     if "ProductName" not in meta:
         meta["ProductName"] = project.stem
     return meta
+
+
+def validate_version(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise PackagingError("Version must be a non-empty string.")
+    value = value.strip()
+    if not re.fullmatch(r"\d+\.\d+", value):
+        raise PackagingError("Version must use major.minor format (e.g. 1.2).")
+    return value
 
 
 def sanitize_identifier(text: str | None, fallback: str) -> str:
@@ -175,6 +185,29 @@ def ensure_mac_section(cfg: dict, updates: list[str]) -> None:
         updates.append("Normalised Mac packaging settings")
 
 
+def ensure_version(cfg: dict, updates: list[str]) -> None:
+    version = cfg.get("Version")
+    if version:
+        cfg["Version"] = validate_version(str(version))
+        return
+
+    project_rel = cfg.get("Project")
+    project_path = (ROOT / project_rel).resolve() if project_rel else first_csproj()
+    if project_path and project_path.exists():
+        meta = read_csproj_metadata(project_path)
+        existing = meta.get("Version")
+        if existing:
+            try:
+                cfg["Version"] = validate_version(existing)
+                updates.append("Added Version from project metadata")
+                return
+            except PackagingError:
+                pass
+
+    cfg["Version"] = DEFAULT_VERSION
+    updates.append("Added default Version")
+
+
 def default_cfg() -> dict:
     project = first_csproj()
     if not project:
@@ -197,6 +230,7 @@ def default_cfg() -> dict:
         "BundleIdentifier": bundle_id,
         "Executable": project.stem,
         "Project": proj_rel,
+        "Version": validate_version(meta.get("Version", DEFAULT_VERSION)),
         "Win": {
             "InnoScript": "Installer/templates/inno.iss",
             "IconIco": (ico.relative_to(ROOT).as_posix() if ico.exists() else ""),
@@ -211,8 +245,6 @@ def default_cfg() -> dict:
             "VolumeName": meta.get("ProductName", project.stem),
         },
     }
-    if "Version" in meta:
-        cfg["Version"] = meta["Version"]
     return cfg
 
 
@@ -232,6 +264,7 @@ def ensure_cfg() -> tuple[dict, bool]:
         updates: list[str] = []
         ensure_bundle_identifier(data, updates)
         ensure_mac_section(data, updates)
+        ensure_version(data, updates)
         if updates:
             with CFG_PATH.open("w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
@@ -248,6 +281,46 @@ def ensure_cfg() -> tuple[dict, bool]:
     log(f"[config] Created default packaging.json at {CFG_PATH}")
     log("Edit the file as needed, then re-run this script.")
     return cfg, True
+
+
+def update_project_version(cfg: dict) -> None:
+    project_rel = cfg.get("Project")
+    if not project_rel:
+        return
+    project = (ROOT / project_rel).resolve()
+    if not project.exists():
+        raise PackagingError(f"Project file not found: {project}")
+
+    version = validate_version(str(cfg.get("Version", DEFAULT_VERSION)))
+    raw_bytes = project.read_bytes()
+    has_bom = raw_bytes.startswith(b"\xef\xbb\xbf")
+    text = raw_bytes.decode("utf-8-sig")
+
+    version_pattern = r"<Version>.*?</Version>"
+    if re.search(version_pattern, text, flags=re.DOTALL):
+        updated = re.sub(version_pattern, f"<Version>{version}</Version>", text, count=1, flags=re.DOTALL)
+    else:
+        group_match = re.search(r"(<PropertyGroup>[\s\S]*?</PropertyGroup>)", text)
+        if not group_match:
+            raise PackagingError("Project file has no <PropertyGroup> to set Version.")
+        group_text = group_match.group(1)
+        insert_line = f"        <Version>{version}</Version>\n"
+        tf_match = re.search(r"(\s*<TargetFrameworks?>.*?</TargetFrameworks?>\s*\n?)", group_text)
+        if tf_match:
+            insert_at = tf_match.end(1)
+            new_group = group_text[:insert_at] + insert_line + group_text[insert_at:]
+        else:
+            close_idx = group_text.rfind("</PropertyGroup>")
+            new_group = group_text[:close_idx] + insert_line + group_text[close_idx:]
+        updated = text[:group_match.start(1)] + new_group + text[group_match.end(1):]
+
+    if updated == text:
+        return
+
+    if has_bom:
+        project.write_text("\ufeff" + updated, encoding="utf-8")
+    else:
+        project.write_text(updated, encoding="utf-8")
 
 
 def git_version() -> str:
@@ -557,6 +630,7 @@ def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
 
 def main() -> None:
     cfg, created = ensure_cfg()
+    update_project_version(cfg)
     if created and len(sys.argv) == 1:
         return
 
