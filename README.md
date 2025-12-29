@@ -94,7 +94,7 @@ All behaviour is driven by a single config file.
 - `Company` – Company / publisher name
 - `Project` – Relative path to the `.csproj` (optional if auto‑detected)
 - `Executable` – Base executable name (without `.exe`)
-- `Version` – Optional override; otherwise inferred from Git tags
+- `Version` – Optional override
 
 ### Windows section
 
@@ -137,15 +137,6 @@ dist/
      ├─ MyApp‑1.2.0‑arm64.dmg
      └─ MyApp‑1.2.0‑x64.dmg
 ```
-
-Version numbers are taken from the nearest Git tag:
-
-```bash
-git tag v1.2.0
-```
-
-If no tag is present, a safe fallback version is used.
-
 ---
 
 ## Design notes
@@ -165,7 +156,6 @@ python Installer/pack.py
 # edit packaging.json
 
 # every release
-git tag v1.3.0
 python Installer/pack.py
 ```
 
