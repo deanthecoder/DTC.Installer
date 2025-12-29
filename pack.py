@@ -19,6 +19,7 @@ import subprocess
 import sys
 import uuid
 import xml.etree.ElementTree as ET
+import configparser
 from pathlib import Path
 
 
@@ -28,6 +29,14 @@ WORK_ROOT = Path(__file__).resolve().parent / ".work"
 IS_MACOS = sys.platform == "darwin"
 IS_WINDOWS = os.name == "nt"
 DEFAULT_VERSION = "0.1"
+
+
+def prefs_path() -> Path:
+    if IS_MACOS:
+        return Path.home() / "Library" / "Application Support" / "Preferences" / "com.deanthecoder.installer.json"
+    if IS_WINDOWS:
+        return Path(os.environ.get("APPDATA", Path.home())) / "com.deanthecoder.installer.json"
+    return Path.home() / ".config" / "com.deanthecoder.installer.json"
 
 
 class PackagingError(RuntimeError):
@@ -55,12 +64,44 @@ def sh(cmd: list[str], cwd: Path | None = None, check: bool = True) -> str:
     return proc.stdout or ""
 
 
+def load_preferences() -> dict:
+    path = prefs_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_preferences(prefs: dict) -> None:
+    path = prefs_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(prefs, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        log(f"[warn] Could not write preferences to {path}: {exc}")
+
+
 def first_csproj() -> Path | None:
-    for path in sorted(ROOT.glob("**/*.csproj")):
-        if Path("Installer") in path.parents:
-            continue
-        return path
-    return None
+    projects = [path for path in ROOT.glob("**/*.csproj")]
+    if not projects:
+        return None
+
+    root_name = ROOT.name.lower()
+    name_matches = [path for path in projects if path.stem.lower() == root_name]
+    if name_matches:
+        projects = name_matches
+
+    def depth(path: Path) -> int:
+        try:
+            return len(path.relative_to(ROOT).parts)
+        except ValueError:
+            return len(path.parts)
+    min_depth = min(depth(path) for path in projects)
+    shallow = [path for path in projects if depth(path) == min_depth]
+    return sorted(shallow)[0]
 
 
 def read_csproj_metadata(project: Path) -> dict[str, str]:
@@ -104,6 +145,126 @@ def sanitize_identifier(text: str | None, fallback: str) -> str:
     return cleaned or fallback
 
 
+def get_prefix_map(prefs: dict) -> dict:
+    mapping = prefs.get("BundleIdentifierPrefixMap")
+    return mapping if isinstance(mapping, dict) else {}
+
+
+def git_dir() -> Path | None:
+    git_path = ROOT / ".git"
+    if git_path.is_dir():
+        return git_path
+    if git_path.is_file():
+        try:
+            text = git_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if text.startswith("gitdir:"):
+            rel = text.split("gitdir:", 1)[1].strip()
+            git_dir_path = (ROOT / rel).resolve()
+            return git_dir_path if git_dir_path.exists() else None
+    return None
+
+
+def git_remote_url() -> str:
+    git_root = git_dir()
+    if not git_root:
+        return ""
+    config_path = git_root / "config"
+    if not config_path.exists():
+        return ""
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read(config_path, encoding="utf-8")
+    except (OSError, configparser.Error):
+        return ""
+    section = 'remote "origin"'
+    if not parser.has_section(section):
+        return ""
+    return (parser.get(section, "url", fallback="") or "").strip()
+
+
+def publisher_url_from_remote(remote: str) -> str:
+    if not remote:
+        return ""
+    remote = remote.strip()
+    match = re.match(r"^https?://([^/]+)/([^/]+)/([^/]+?)(?:\.git)?$", remote)
+    if not match:
+        match = re.match(r"^git@([^:]+):([^/]+)/([^/]+?)(?:\.git)?$", remote)
+    if not match:
+        return ""
+    host, owner, _repo = match.groups()
+    return f"https://{host}/{owner}"
+
+
+def default_publisher_url() -> str:
+    return publisher_url_from_remote(git_remote_url())
+
+
+def normalize_bundle_prefix(prefix: str | None) -> str | None:
+    if not prefix:
+        return None
+    prefix = str(prefix).strip()
+    if not prefix:
+        return None
+    if not prefix.endswith("."):
+        prefix += "."
+    return prefix
+
+
+def extract_bundle_prefix(bundle_id: str | None) -> str | None:
+    if not bundle_id:
+        return None
+    parts = [part for part in str(bundle_id).strip().split(".") if part]
+    if len(parts) < 3:
+        return None
+    return normalize_bundle_prefix(".".join(parts[:-1]))
+
+
+def auto_bundle_prefix(cfg: dict) -> str:
+    company_slug = sanitize_identifier(cfg.get("CompanyName"), "example")
+    return normalize_bundle_prefix(f"com.{company_slug}") or "com.example."
+
+
+def preferred_bundle_prefix(prefs: dict, auto_prefix: str) -> str | None:
+    mapping = get_prefix_map(prefs)
+    if auto_prefix in mapping:
+        return normalize_bundle_prefix(mapping.get(auto_prefix))
+    legacy = prefs.get("BundleIdentifierPrefix")
+    return normalize_bundle_prefix(legacy)
+
+
+def find_first_icon(project_dir: Path, pattern: str) -> Path | None:
+    if not project_dir or not project_dir.exists():
+        return None
+    matches = []
+    for path in project_dir.rglob(pattern):
+        if not path.is_file():
+            continue
+        parts = [part.lower() for part in path.parts]
+        if "bin" in parts or "obj" in parts:
+            continue
+        matches.append(path)
+    if not matches:
+        return None
+    first = sorted(matches)[0]
+    return first.resolve()
+
+
+def remember_bundle_prefix(cfg: dict) -> None:
+    auto_prefix = auto_bundle_prefix(cfg)
+    actual_prefix = extract_bundle_prefix(cfg.get("BundleIdentifier"))
+    if not actual_prefix:
+        return
+    prefs = load_preferences()
+    mapping = get_prefix_map(prefs)
+    if mapping.get(auto_prefix) == actual_prefix:
+        return
+    mapping[auto_prefix] = actual_prefix
+    prefs["BundleIdentifierPrefixMap"] = mapping
+    save_preferences(prefs)
+
+
 def ensure_bundle_identifier(cfg: dict, updates: list[str]) -> None:
     if cfg.get("BundleIdentifier"):
         return
@@ -120,9 +281,14 @@ def ensure_bundle_identifier(cfg: dict, updates: list[str]) -> None:
         default_product = "app"
 
     base_product = cfg.get("ProductName") or default_product
-    company_slug = sanitize_identifier(cfg.get("CompanyName"), "example")
+    prefs = load_preferences()
+    auto_prefix = auto_bundle_prefix(cfg)
+    preferred_prefix = preferred_bundle_prefix(prefs, auto_prefix)
     product_slug = sanitize_identifier(base_product, default_product.lower())
-    cfg["BundleIdentifier"] = f"com.{company_slug}.{product_slug}"
+    if preferred_prefix:
+        cfg["BundleIdentifier"] = f"{preferred_prefix}{product_slug}"
+    else:
+        cfg["BundleIdentifier"] = f"{auto_prefix}{product_slug}"
     updates.append("Added default BundleIdentifier")
 
 
@@ -148,12 +314,18 @@ def mac_defaults(cfg: dict) -> dict:
                 icon_rel = icon_path.relative_to(ROOT).as_posix()
             except ValueError:
                 icon_rel = icon_path.as_posix()
+        else:
+            fallback_icon = find_first_icon(project_path.parent, "*.icns")
+            if fallback_icon:
+                try:
+                    icon_rel = fallback_icon.relative_to(ROOT).as_posix()
+                except ValueError:
+                    icon_rel = fallback_icon.as_posix()
 
     return {
         "RuntimeIdentifiers": ["osx-arm64", "osx-x64"],
         "IconIcns": icon_rel,
         "InfoPlist": "Installer/templates/Info.plist",
-        "VolumeName": cfg.get("ProductName") or exe_name,
     }
 
 
@@ -168,17 +340,11 @@ def ensure_mac_section(cfg: dict, updates: list[str]) -> None:
 
     updated = False
     mac_cfg = cfg["Mac"] or {}
-    if not mac_cfg.get("Executable") and cfg.get("Executable"):
-        mac_cfg["Executable"] = cfg.get("Executable")
-        updated = True
     if "RuntimeIdentifiers" not in mac_cfg or not mac_cfg.get("RuntimeIdentifiers"):
         mac_cfg["RuntimeIdentifiers"] = ["osx-arm64", "osx-x64"]
         updated = True
     if not mac_cfg.get("InfoPlist"):
         mac_cfg["InfoPlist"] = "Installer/templates/Info.plist"
-        updated = True
-    if not mac_cfg.get("VolumeName"):
-        mac_cfg["VolumeName"] = cfg.get("ProductName") or mac_cfg.get("Executable") or "App"
         updated = True
     if updated:
         cfg["Mac"] = mac_cfg
@@ -208,6 +374,16 @@ def ensure_version(cfg: dict, updates: list[str]) -> None:
     updates.append("Added default Version")
 
 
+def ensure_publisher_url(cfg: dict, updates: list[str]) -> None:
+    if cfg.get("PublisherUrl"):
+        return
+    publisher_url = default_publisher_url()
+    if not publisher_url:
+        return
+    cfg["PublisherUrl"] = publisher_url
+    updates.append("Added default PublisherUrl from git remote")
+
+
 def default_cfg() -> dict:
     project = first_csproj()
     if not project:
@@ -218,31 +394,45 @@ def default_cfg() -> dict:
     proj_dir = project.parent
     ico = proj_dir / "Assets" / "app.ico"
     icns = proj_dir / "Assets" / "app.icns"
+    icon_ico = ico
+    icon_icns = icns
+    if not icon_ico.exists():
+        fallback_ico = find_first_icon(proj_dir, "*.ico")
+        if fallback_ico:
+            icon_ico = fallback_ico
+    if not icon_icns.exists():
+        fallback_icns = find_first_icon(proj_dir, "*.icns")
+        if fallback_icns:
+            icon_icns = fallback_icns
     generated_guid = str(uuid.uuid4()).upper()
     company_slug = sanitize_identifier(meta.get("CompanyName"), "example")
     product_slug = sanitize_identifier(meta.get("ProductName") or project.stem, project.stem.lower())
-    bundle_id = f"com.{company_slug}.{product_slug}"
+    auto_prefix = normalize_bundle_prefix(f"com.{company_slug}") or "com.example."
+    preferred_prefix = preferred_bundle_prefix(load_preferences(), auto_prefix)
+    if preferred_prefix:
+        bundle_id = f"{preferred_prefix}{product_slug}"
+    else:
+        bundle_id = f"{auto_prefix}{product_slug}"
+    publisher_url = default_publisher_url()
 
     cfg = {
         "ProductName": meta.get("ProductName", project.stem),
         "CompanyName": meta.get("CompanyName", ""),
-        "PublisherUrl": "",
+        "PublisherUrl": publisher_url,
         "BundleIdentifier": bundle_id,
         "Executable": project.stem,
         "Project": proj_rel,
         "Version": validate_version(meta.get("Version", DEFAULT_VERSION)),
         "Win": {
             "InnoScript": "Installer/templates/inno.iss",
-            "IconIco": (ico.relative_to(ROOT).as_posix() if ico.exists() else ""),
+            "IconIco": (icon_ico.relative_to(ROOT).as_posix() if icon_ico.exists() else ""),
             "GUID": f"{{{generated_guid}}}",
-            "PublisherUrl": "",
             "RuntimeIdentifier": "win-x64",
         },
         "Mac": {
             "RuntimeIdentifiers": ["osx-arm64", "osx-x64"],
-            "IconIcns": (icns.relative_to(ROOT).as_posix() if icns.exists() else ""),
+            "IconIcns": (icon_icns.relative_to(ROOT).as_posix() if icon_icns.exists() else ""),
             "InfoPlist": "Installer/templates/Info.plist",
-            "VolumeName": meta.get("ProductName", project.stem),
         },
     }
     return cfg
@@ -265,6 +455,8 @@ def ensure_cfg() -> tuple[dict, bool]:
         ensure_bundle_identifier(data, updates)
         ensure_mac_section(data, updates)
         ensure_version(data, updates)
+        ensure_publisher_url(data, updates)
+        remember_bundle_prefix(data)
         if updates:
             with CFG_PATH.open("w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
@@ -275,6 +467,7 @@ def ensure_cfg() -> tuple[dict, bool]:
         return data, False
 
     cfg = default_cfg()
+    remember_bundle_prefix(cfg)
     with CFG_PATH.open("w", encoding="utf-8") as fh:
         json.dump(cfg, fh, indent=2)
         fh.write("\n")
