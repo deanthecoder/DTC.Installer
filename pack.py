@@ -384,6 +384,16 @@ def ensure_publisher_url(cfg: dict, updates: list[str]) -> None:
     updates.append("Added default PublisherUrl from git remote")
 
 
+def ensure_win_openal(cfg: dict, updates: list[str]) -> None:
+    win_cfg = cfg.get("Win")
+    if not isinstance(win_cfg, dict):
+        return
+    if "InstallOpenAL" in win_cfg:
+        return
+    win_cfg["InstallOpenAL"] = False
+    updates.append("Added Win.InstallOpenAL (default false)")
+
+
 def default_cfg() -> dict:
     project = first_csproj()
     if not project:
@@ -428,6 +438,7 @@ def default_cfg() -> dict:
             "IconIco": (icon_ico.relative_to(ROOT).as_posix() if icon_ico.exists() else ""),
             "GUID": f"{{{generated_guid}}}",
             "RuntimeIdentifier": "win-x64",
+            "InstallOpenAL": False,
         },
         "Mac": {
             "RuntimeIdentifiers": ["osx-arm64", "osx-x64"],
@@ -456,6 +467,7 @@ def ensure_cfg() -> tuple[dict, bool]:
         ensure_mac_section(data, updates)
         ensure_version(data, updates)
         ensure_publisher_url(data, updates)
+        ensure_win_openal(data, updates)
         remember_bundle_prefix(data)
         if updates:
             with CFG_PATH.open("w", encoding="utf-8") as fh:
@@ -601,6 +613,32 @@ def replace_tokens(template: Path, tokens: dict[str, str], work_dir: Path, outpu
     return output
 
 
+def configure_openal(win_cfg: dict, publish_dir: Path) -> None:
+    install_openal = bool(win_cfg.get("InstallOpenAL", False))
+    openal_dest = publish_dir / "3rdParty" / "oalinst.exe"
+    if install_openal:
+        if openal_dest.exists():
+            return
+        candidates = [
+            ROOT / "external" / "oalinst.exe",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                openal_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(candidate, openal_dest)
+                log(f"[win] Added OpenAL installer from {candidate}")
+                return
+        log("[warn] Win.InstallOpenAL enabled but oalinst.exe not found; skipping OpenAL installer.")
+        return
+
+    if openal_dest.exists():
+        openal_dest.unlink()
+        try:
+            openal_dest.parent.rmdir()
+        except OSError:
+            pass
+
+
 def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
     win_cfg = cfg.get("Win") or {}
     exe_name = win_cfg.get("Executable") or cfg.get("Executable")
@@ -615,6 +653,8 @@ def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> Non
     template_path = ROOT / win_cfg.get("InnoScript", "")
     if not template_path.exists():
         raise PackagingError(f"Inno script template missing: {template_path}")
+
+    configure_openal(win_cfg, publish_dir)
 
     icon_path = ROOT / win_cfg.get("IconIco", "")
     if win_cfg.get("IconIco") and not icon_path.exists():
