@@ -488,6 +488,25 @@ def ensure_cfg() -> tuple[dict, bool]:
     return cfg, True
 
 
+def upsert_project_property(text: str, tag: str, value: str) -> str:
+    pattern = rf"<{re.escape(tag)}>.*?</{re.escape(tag)}>"
+    if re.search(pattern, text, flags=re.DOTALL):
+        return re.sub(pattern, f"<{tag}>{value}</{tag}>", text, count=1, flags=re.DOTALL)
+    group_match = re.search(r"(<PropertyGroup>[\s\S]*?</PropertyGroup>)", text)
+    if not group_match:
+        raise PackagingError(f"Project file has no <PropertyGroup> to set {tag}.")
+    group_text = group_match.group(1)
+    insert_line = f"        <{tag}>{value}</{tag}>\n"
+    tf_match = re.search(r"(\s*<TargetFrameworks?>.*?</TargetFrameworks?>\s*\n?)", group_text)
+    if tf_match:
+        insert_at = tf_match.end(1)
+        new_group = group_text[:insert_at] + insert_line + group_text[insert_at:]
+    else:
+        close_idx = group_text.rfind("</PropertyGroup>")
+        new_group = group_text[:close_idx] + insert_line + group_text[close_idx:]
+    return text[:group_match.start(1)] + new_group + text[group_match.end(1):]
+
+
 def update_project_version(cfg: dict) -> None:
     project_rel = cfg.get("Project")
     if not project_rel:
@@ -497,27 +516,15 @@ def update_project_version(cfg: dict) -> None:
         raise PackagingError(f"Project file not found: {project}")
 
     version = validate_version(str(cfg.get("Version", DEFAULT_VERSION)))
+    assembly_version = f"{version}.0.0"
+    file_version = assembly_version
     raw_bytes = project.read_bytes()
     has_bom = raw_bytes.startswith(b"\xef\xbb\xbf")
     text = raw_bytes.decode("utf-8-sig")
 
-    version_pattern = r"<Version>.*?</Version>"
-    if re.search(version_pattern, text, flags=re.DOTALL):
-        updated = re.sub(version_pattern, f"<Version>{version}</Version>", text, count=1, flags=re.DOTALL)
-    else:
-        group_match = re.search(r"(<PropertyGroup>[\s\S]*?</PropertyGroup>)", text)
-        if not group_match:
-            raise PackagingError("Project file has no <PropertyGroup> to set Version.")
-        group_text = group_match.group(1)
-        insert_line = f"        <Version>{version}</Version>\n"
-        tf_match = re.search(r"(\s*<TargetFrameworks?>.*?</TargetFrameworks?>\s*\n?)", group_text)
-        if tf_match:
-            insert_at = tf_match.end(1)
-            new_group = group_text[:insert_at] + insert_line + group_text[insert_at:]
-        else:
-            close_idx = group_text.rfind("</PropertyGroup>")
-            new_group = group_text[:close_idx] + insert_line + group_text[close_idx:]
-        updated = text[:group_match.start(1)] + new_group + text[group_match.end(1):]
+    updated = upsert_project_property(text, "Version", version)
+    updated = upsert_project_property(updated, "AssemblyVersion", assembly_version)
+    updated = upsert_project_property(updated, "FileVersion", file_version)
 
     if updated == text:
         return
