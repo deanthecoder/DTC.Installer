@@ -739,6 +739,36 @@ def normalize_runtime_identifiers(value) -> list[str]:
     raise PackagingError("Runtime identifiers must be a string or list of strings.")
 
 
+def sign_macos_bundle(bundle_root: Path, mac_cfg: dict) -> None:
+    if not bundle_root.exists():
+        raise PackagingError(f"App bundle not found for signing: {bundle_root}")
+
+    signing_identity = str(mac_cfg.get("SigningIdentity", "-") or "-").strip()
+    if not signing_identity:
+        signing_identity = "-"
+
+    sh(
+        [
+            "codesign",
+            "--force",
+            "--deep",
+            "--sign",
+            signing_identity,
+            str(bundle_root),
+        ]
+    )
+    sh(
+        [
+            "codesign",
+            "--verify",
+            "--deep",
+            "--strict",
+            "--verbose=2",
+            str(bundle_root),
+        ]
+    )
+
+
 def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
     if not IS_MACOS:
         raise PackagingError("macOS packaging requires running on macOS.")
@@ -836,6 +866,7 @@ def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
         shutil.rmtree(staging_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(bundle_root, staging_dir / bundle_root.name)
+    sign_macos_bundle(staging_dir / bundle_root.name, mac_cfg)
 
     applications_link = staging_dir / "Applications"
     if applications_link.exists() or applications_link.is_symlink():
