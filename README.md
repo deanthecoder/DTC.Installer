@@ -82,6 +82,13 @@ Once configured, packaging your app is a **one‑command operation**.
    python Installer/pack.py
    ```
 
+   To build with a one-off version without editing `packaging.json`, pass it on
+   the command line:
+
+   ```bash
+   python Installer/pack.py --version 1.2
+   ```
+
 ---
 
 ## Configuration: `packaging.json`
@@ -94,7 +101,7 @@ All behaviour is driven by a single config file.
 - `Company` – Company / publisher name
 - `Project` – Relative path to the `.csproj` (optional if auto‑detected)
 - `Executable` – Base executable name (without `.exe`)
-- `Version` – Optional override
+- `Version` – Default package version; can be overridden for a single run with `--version`
 
 ### Windows section
 
@@ -158,6 +165,9 @@ python Installer/pack.py
 
 # every release
 python Installer/pack.py
+
+# one-off release version
+python Installer/pack.py --version 1.2
 ```
 
 That’s it.

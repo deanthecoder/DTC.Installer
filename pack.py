@@ -10,6 +10,7 @@ platform support can be layered in later without impacting consumers.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -137,6 +138,26 @@ def validate_version(value: str) -> str:
     if not re.fullmatch(r"\d+\.\d+", value):
         raise PackagingError("Version must use major.minor format (e.g. 1.2).")
     return value
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build platform-native installers from packaging.json."
+    )
+    parser.add_argument(
+        "--version",
+        "--package-version",
+        dest="version",
+        metavar="VERSION",
+        help="Override the package version from packaging.json for this run.",
+    )
+    args = parser.parse_args(argv)
+    if args.version:
+        try:
+            args.version = validate_version(args.version)
+        except PackagingError as exc:
+            parser.error(str(exc))
+    return args
 
 
 def sanitize_identifier(text: str | None, fallback: str) -> str:
@@ -900,9 +921,13 @@ def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
 
 
 def main() -> None:
+    args = parse_args()
     cfg, created = ensure_cfg()
+    if args.version:
+        cfg["Version"] = args.version
+        log(f"[config] Using command-line Version override: {args.version}")
     update_project_version(cfg)
-    if created and len(sys.argv) == 1:
+    if created and not args.version:
         return
 
     WORK_ROOT.mkdir(parents=True, exist_ok=True)
