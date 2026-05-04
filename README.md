@@ -174,5 +174,57 @@ That’s it.
 
 ---
 
+## GitHub Actions
+
+The installer repo also provides a reusable workflow at:
+
+```yaml
+deanthecoder/DTC.Installer/.github/workflows/installers.yml@main
+```
+
+GitHub only discovers workflows from the parent repository's own
+`.github/workflows` folder, so a submodule workflow will not run automatically
+just because the submodule is checked out. Add a small wrapper workflow to each
+product repo instead:
+
+```yaml
+name: Installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Installer version, e.g. 0.1"
+        required: true
+        default: "0.1"
+        type: string
+      build_windows:
+        description: "Build the Windows installer."
+        required: true
+        default: true
+        type: boolean
+      build_macos:
+        description: "Build the macOS DMGs."
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  installers:
+    uses: deanthecoder/DTC.Installer/.github/workflows/installers.yml@main
+    with:
+      version: ${{ inputs.version }}
+      build_windows: ${{ inputs.build_windows }}
+      build_macos: ${{ inputs.build_macos }}
+```
+
+The reusable workflow checks out the caller repository with submodules enabled,
+runs `Installer/pack.py --version ...`, and uploads:
+
+- `dist/win/*.exe` from a Windows runner.
+- `dist/mac/*.dmg` from a macOS runner.
+
+---
+
 ## License
 See [LICENSE](LICENSE) for details.

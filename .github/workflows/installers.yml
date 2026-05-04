@@ -1,0 +1,101 @@
+name: Build Installers
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Installer version, e.g. 0.1"
+        required: true
+        type: string
+      build_windows:
+        description: "Build the Windows/Inno Setup installer."
+        required: false
+        default: true
+        type: boolean
+      build_macos:
+        description: "Build the macOS DMG installer."
+        required: false
+        default: true
+        type: boolean
+      artifact_name_prefix:
+        description: "Optional artifact name prefix. Defaults to the caller repository name."
+        required: false
+        default: ""
+        type: string
+      artifact_retention_days:
+        description: "Number of days to retain uploaded installer artifacts."
+        required: false
+        default: 14
+        type: number
+
+jobs:
+  windows:
+    name: Build Windows installer
+    if: ${{ inputs.build_windows }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build installer
+        run: python Installer/pack.py --version "${{ inputs.version }}"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name_prefix || github.event.repository.name }}-windows-installer-${{ inputs.version }}
+          path: dist/win/*.exe
+          if-no-files-found: error
+          retention-days: ${{ inputs.artifact_retention_days }}
+
+  macos:
+    name: Build macOS DMGs
+    if: ${{ inputs.build_macos }}
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Build DMGs
+        run: python Installer/pack.py --version "${{ inputs.version }}"
+
+      - name: Upload DMG artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name_prefix || github.event.repository.name }}-macos-dmgs-${{ inputs.version }}
+          path: dist/mac/*.dmg
+          if-no-files-found: error
+          retention-days: ${{ inputs.artifact_retention_days }}
