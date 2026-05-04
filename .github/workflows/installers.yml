@@ -27,6 +27,11 @@ on:
         required: false
         default: 14
         type: number
+      create_tag:
+        description: "Create and push a v-prefixed git tag after successful builds."
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   windows:
@@ -99,3 +104,34 @@ jobs:
           path: dist/mac/*.dmg
           if-no-files-found: error
           retention-days: ${{ inputs.artifact_retention_days }}
+
+  tag:
+    name: Tag release
+    needs:
+      - windows
+      - macos
+    if: ${{ always() && !cancelled() && inputs.create_tag && (inputs.build_windows || inputs.build_macos) && (needs.windows.result == 'success' || needs.windows.result == 'skipped') && (needs.macos.result == 'success' || needs.macos.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Create version tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${{ inputs.version }}"
+          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "${tag}"
+          git push origin "${tag}"

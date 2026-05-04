@@ -208,14 +208,22 @@ on:
         required: true
         default: true
         type: boolean
+      create_tag:
+        description: "Create v-prefixed tag after successful builds."
+        required: true
+        default: true
+        type: boolean
 
 jobs:
   installers:
+    permissions:
+      contents: write
     uses: deanthecoder/DTC.Installer/.github/workflows/installers.yml@main
     with:
       version: ${{ inputs.version }}
       build_windows: ${{ inputs.build_windows }}
       build_macos: ${{ inputs.build_macos }}
+      create_tag: ${{ inputs.create_tag }}
 ```
 
 The reusable workflow checks out the caller repository with submodules enabled,
@@ -223,6 +231,10 @@ runs `Installer/pack.py --version ...`, and uploads:
 
 - `dist/win/*.exe` from a Windows runner.
 - `dist/mac/*.dmg` from a macOS runner.
+
+When `create_tag` is enabled, the workflow also creates an annotated
+`v<version>` tag after the selected installer builds pass. Existing tags are not
+overwritten.
 
 ---
 
