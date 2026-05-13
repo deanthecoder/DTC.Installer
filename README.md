@@ -115,6 +115,7 @@ All behaviour is driven by a single config file.
 - `.exe` is added automatically if omitted
 - Missing icons generate warnings, not hard failures
 - `InstallOpenAL` (default `false`) includes `external/oalinst.exe` as `3rdParty/oalinst.exe` and runs it silently during install when enabled
+- `ShowRunOnStartupTask` (default `false`) shows an unchecked installer task that can add the app to the current user's Windows startup registry key
 
 ### macOS section
 

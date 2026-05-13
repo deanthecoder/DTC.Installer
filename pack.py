@@ -415,6 +415,16 @@ def ensure_win_openal(cfg: dict, updates: list[str]) -> None:
     updates.append("Added Win.InstallOpenAL (default false)")
 
 
+def ensure_win_startup_task(cfg: dict, updates: list[str]) -> None:
+    win_cfg = cfg.get("Win")
+    if not isinstance(win_cfg, dict):
+        return
+    if "ShowRunOnStartupTask" in win_cfg:
+        return
+    win_cfg["ShowRunOnStartupTask"] = False
+    updates.append("Added Win.ShowRunOnStartupTask (default false)")
+
+
 def default_cfg() -> dict:
     project = first_csproj()
     if not project:
@@ -460,6 +470,7 @@ def default_cfg() -> dict:
             "GUID": f"{{{generated_guid}}}",
             "RuntimeIdentifier": "win-x64",
             "InstallOpenAL": False,
+            "ShowRunOnStartupTask": False,
         },
         "Mac": {
             "RuntimeIdentifiers": ["osx-arm64", "osx-x64"],
@@ -489,6 +500,7 @@ def ensure_cfg() -> tuple[dict, bool]:
         ensure_version(data, updates)
         ensure_publisher_url(data, updates)
         ensure_win_openal(data, updates)
+        ensure_win_startup_task(data, updates)
         remember_bundle_prefix(data)
         if updates:
             with CFG_PATH.open("w", encoding="utf-8") as fh:
@@ -716,6 +728,7 @@ def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> Non
         "OutputDir": str(dist_dir),
         "OutputBase": output_base,
         "SetupIconFile": str(icon_path) if icon_path.exists() else "",
+        "ShowRunOnStartupTask": "1" if win_cfg.get("ShowRunOnStartupTask", False) else "0",
     }
 
     work_iss = replace_tokens(template_path, tokens, work_dir)
