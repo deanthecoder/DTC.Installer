@@ -60,9 +60,9 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup --version=6.3.3 --allow-downgrade --yes --no-progress
 
-      - name: Exclude installer build directories from Defender
+      - name: Suspend Defender real-time scanning
         shell: pwsh
-        run: Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
 
       - name: Build installer
         run: python Installer/pack.py --version "${{ inputs.version }}"
