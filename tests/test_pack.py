@@ -48,8 +48,9 @@ class CommandLineConfigTests(unittest.TestCase):
             self.assertTrue(command.is_symlink())
             self.assertEqual(Path("../lib/brain/brain"), command.readlink())
             self.assertEqual("brain", (root / ".work" / "mac-osx-arm64" / "payload" / "usr" / "local" / "lib" / "brain" / "brain").name)
-            self.assertEqual("pkgbuild", run.call_args_list[0].args[0][0])
-            self.assertEqual("hdiutil", run.call_args_list[1].args[0][0])
+            self.assertEqual("xattr", run.call_args_list[0].args[0][0])
+            self.assertEqual("pkgbuild", run.call_args_list[1].args[0][0])
+            self.assertEqual("hdiutil", run.call_args_list[2].args[0][0])
 
     def test_project_property_preserves_existing_indentation(self):
         project = """<Project Sdk=\"Microsoft.NET.Sdk\">
