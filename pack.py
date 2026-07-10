@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import uuid
 import xml.etree.ElementTree as ET
 import configparser
@@ -739,6 +740,10 @@ def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> Non
     work_dir.mkdir(parents=True, exist_ok=True)
 
     output_base = f"{cfg['ProductName']}-{version}-{rid}"
+    compiler_output_dir = Path(os.environ.get("RUNNER_TEMP", work_dir)) / "dtc-installer-output"
+    if compiler_output_dir.exists():
+        shutil.rmtree(compiler_output_dir)
+    compiler_output_dir.mkdir(parents=True, exist_ok=True)
     tokens = {
         "ProductName": cfg["ProductName"],
         "CompanyName": cfg.get("CompanyName", ""),
@@ -747,7 +752,7 @@ def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> Non
         "Executable": exe_name,
         "AppId": app_id,
         "SourceDir": str(publish_dir),
-        "OutputDir": str(dist_dir),
+        "OutputDir": str(compiler_output_dir),
         "OutputBase": output_base,
         "SetupIconFile": str(icon_path) if icon_path.exists() else "",
         "ShowRunOnStartupTask": "1" if win_cfg.get("ShowRunOnStartupTask", False) else "0",
@@ -757,13 +762,26 @@ def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> Non
     work_iss = replace_tokens(template_path, tokens, work_dir)
     compiler = locate_inno_compiler(win_cfg)
     try:
-        sh([compiler, str(work_iss.resolve())])
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                sh([compiler, str(work_iss.resolve())])
+                break
+            except PackagingError:
+                if attempt == attempts:
+                    raise
+                log(f"[win] Inno Setup failed; retrying ({attempt + 1}/{attempts})...")
+                time.sleep(attempt * 2)
     except FileNotFoundError as exc:  # pragma: no cover (safety)
         raise PackagingError(
             "Inno Setup compiler not found on PATH. Install Inno Setup and "
             "ensure 'iscc' is available."
         ) from exc
 
+    installer = compiler_output_dir / f"{output_base}.exe"
+    if not installer.exists():
+        raise PackagingError(f"Inno Setup did not create the expected installer: {installer}")
+    shutil.copy2(installer, dist_dir / installer.name)
     log(f"[win] Installer written to {dist_dir}")
 
 

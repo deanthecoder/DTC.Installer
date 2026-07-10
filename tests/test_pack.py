@@ -66,6 +66,37 @@ class CommandLineConfigTests(unittest.TestCase):
 
         self.assertIn("    <Version>1.2</Version>\n    <AssemblyName>brain</AssemblyName>", updated)
 
+    def test_windows_package_uses_runner_temp_then_copies_installer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            publish_dir = root / "publish"
+            publish_dir.mkdir()
+            (publish_dir / "brain.exe").touch()
+            template = root / "inno.iss"
+            template.write_text("{{OutputDir}}\n{{OutputBase}}\n", encoding="utf-8")
+            runner_temp = root / "runner-temp"
+            cfg = {
+                "ProductName": "Brain",
+                "Executable": "brain",
+                "CommandLine": {"Name": "brain"},
+                "Win": {"Executable": "brain.exe", "InnoScript": "inno.iss"},
+            }
+
+            def compile_installer(_command):
+                output_dir = runner_temp / "dtc-installer-output"
+                (output_dir / "Brain-1.0-win-x64.exe").touch()
+
+            with mock.patch.object(pack, "ROOT", root), \
+                 mock.patch.object(pack, "WORK_ROOT", root / ".work"), \
+                 mock.patch.object(pack, "locate_inno_compiler", return_value="iscc"), \
+                 mock.patch.object(pack, "sh", side_effect=compile_installer), \
+                 mock.patch.dict(pack.os.environ, {"RUNNER_TEMP": str(runner_temp)}):
+                pack.package_windows(cfg, publish_dir, "1.0", "win-x64")
+
+            generated = (root / ".work" / "windows" / "inno_generated.iss").read_text(encoding="utf-8")
+            self.assertIn(str(runner_temp / "dtc-installer-output"), generated)
+            self.assertTrue((root / "dist" / "win" / "Brain-1.0-win-x64.exe").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
