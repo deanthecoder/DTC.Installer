@@ -549,10 +549,12 @@ def upsert_project_property(text: str, tag: str, value: str) -> str:
     if not group_match:
         raise PackagingError(f"Project file has no <PropertyGroup> to set {tag}.")
     group_text = group_match.group(1)
-    insert_line = f"        <{tag}>{value}</{tag}>\n"
-    tf_match = re.search(r"(\s*<TargetFrameworks?>.*?</TargetFrameworks?>\s*\n?)", group_text)
+    tf_match = re.search(r"(?m)^([ \t]*)<TargetFrameworks?>.*?</TargetFrameworks?>[ \t]*\r?\n", group_text)
+    property_match = re.search(r"(?m)^([ \t]*)<(?!/?PropertyGroup\b)[^/].*?>", group_text)
+    indentation = tf_match.group(1) if tf_match else property_match.group(1) if property_match else "    "
+    insert_line = f"{indentation}<{tag}>{value}</{tag}>\n"
     if tf_match:
-        insert_at = tf_match.end(1)
+        insert_at = tf_match.end()
         new_group = group_text[:insert_at] + insert_line + group_text[insert_at:]
     else:
         close_idx = group_text.rfind("</PropertyGroup>")

@@ -51,6 +51,21 @@ class CommandLineConfigTests(unittest.TestCase):
             self.assertEqual("pkgbuild", run.call_args_list[0].args[0][0])
             self.assertEqual("hdiutil", run.call_args_list[1].args[0][0])
 
+    def test_project_property_preserves_existing_indentation(self):
+        project = """<Project Sdk=\"Microsoft.NET.Sdk\">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>brain</AssemblyName>
+  </PropertyGroup>
+
+</Project>
+"""
+
+        updated = pack.upsert_project_property(project, "Version", "1.2")
+
+        self.assertIn("    <Version>1.2</Version>\n    <AssemblyName>brain</AssemblyName>", updated)
+
 
 if __name__ == "__main__":
     unittest.main()
