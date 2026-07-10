@@ -875,7 +875,6 @@ def package_macos_command_line(
     exe_path = install_dir / exe_name
     ensure_executable(exe_path)
     (command_dir / command_name).symlink_to(Path("..") / "lib" / command_name / exe_name)
-    sh(["xattr", "-cr", str(payload_root)])
 
     staging_dir = work_dir / "dmg"
     staging_dir.mkdir(parents=True, exist_ok=True)
