@@ -60,12 +60,10 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup --version=6.3.3 --allow-downgrade --yes --no-progress
 
-      - name: Suspend Defender real-time scanning
-        shell: pwsh
-        run: Set-MpPreference -DisableRealtimeMonitoring $true
-
       - name: Build installer
         run: python Installer/pack.py --version "${{ inputs.version }}"
+        env:
+          DTC_INSTALLER_OUTPUT_DIR: C:\dtc-installer-output
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v7

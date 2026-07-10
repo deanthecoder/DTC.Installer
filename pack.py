@@ -740,7 +740,12 @@ def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> Non
     work_dir.mkdir(parents=True, exist_ok=True)
 
     output_base = f"{cfg['ProductName']}-{version}-{rid}"
-    compiler_output_dir = Path(os.environ.get("RUNNER_TEMP", work_dir)) / "dtc-installer-output"
+    configured_output_dir = os.environ.get("DTC_INSTALLER_OUTPUT_DIR")
+    compiler_output_dir = (
+        Path(configured_output_dir)
+        if configured_output_dir
+        else Path(os.environ.get("RUNNER_TEMP", work_dir)) / "dtc-installer-output"
+    )
     if compiler_output_dir.exists():
         shutil.rmtree(compiler_output_dir)
     compiler_output_dir.mkdir(parents=True, exist_ok=True)

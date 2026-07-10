@@ -90,7 +90,7 @@ class CommandLineConfigTests(unittest.TestCase):
                  mock.patch.object(pack, "WORK_ROOT", root / ".work"), \
                  mock.patch.object(pack, "locate_inno_compiler", return_value="iscc"), \
                  mock.patch.object(pack, "sh", side_effect=compile_installer), \
-                 mock.patch.dict(pack.os.environ, {"RUNNER_TEMP": str(runner_temp)}):
+                 mock.patch.dict(pack.os.environ, {"DTC_INSTALLER_OUTPUT_DIR": str(runner_temp / "dtc-installer-output")}):
                 pack.package_windows(cfg, publish_dir, "1.0", "win-x64")
 
             generated = (root / ".work" / "windows" / "inno_generated.iss").read_text(encoding="utf-8")
