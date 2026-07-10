@@ -58,7 +58,7 @@ jobs:
           python-version: "3.x"
 
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.3.3 --yes --no-progress
+        run: choco install innosetup --version=6.3.3 --allow-downgrade --yes --no-progress
 
       - name: Build installer
         run: python Installer/pack.py --version "${{ inputs.version }}"
