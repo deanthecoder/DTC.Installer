@@ -166,6 +166,26 @@ def sanitize_identifier(text: str | None, fallback: str) -> str:
     return cleaned or fallback
 
 
+def command_line_name(cfg: dict) -> str | None:
+    command_line = cfg.get("CommandLine")
+    if not command_line:
+        return None
+
+    if command_line is True:
+        name = cfg.get("Executable")
+    elif isinstance(command_line, dict):
+        name = command_line.get("Name") or cfg.get("Executable")
+    else:
+        raise PackagingError("CommandLine must be true or an object containing Name.")
+
+    name = str(name or "").strip()
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        raise PackagingError("CommandLine.Name may contain only letters, numbers, dots, underscores, and hyphens.")
+    return name
+
+
 def get_prefix_map(prefs: dict) -> dict:
     mapping = prefs.get("BundleIdentifierPrefixMap")
     return mapping if isinstance(mapping, dict) else {}
@@ -729,6 +749,7 @@ def package_windows(cfg: dict, publish_dir: Path, version: str, rid: str) -> Non
         "OutputBase": output_base,
         "SetupIconFile": str(icon_path) if icon_path.exists() else "",
         "ShowRunOnStartupTask": "1" if win_cfg.get("ShowRunOnStartupTask", False) else "0",
+        "CommandLine": "1" if command_line_name(cfg) else "0",
     }
 
     work_iss = replace_tokens(template_path, tokens, work_dir)
@@ -803,6 +824,81 @@ def sign_macos_bundle(bundle_root: Path, mac_cfg: dict) -> None:
     )
 
 
+def write_dmg(staging_dir: Path, dist_dir: Path, volume_name: str, dmg_name: str) -> None:
+    dmg_path = dist_dir / dmg_name
+    if dmg_path.exists():
+        dmg_path.unlink()
+
+    sh(
+        [
+            "hdiutil",
+            "create",
+            "-fs",
+            "HFS+",
+            "-srcfolder",
+            str(staging_dir),
+            "-volname",
+            volume_name,
+            "-ov",
+            "-format",
+            "UDZO",
+            str(dmg_path),
+        ]
+    )
+
+
+def package_macos_command_line(
+    cfg: dict,
+    mac_cfg: dict,
+    publish_dir: Path,
+    version: str,
+    rid: str,
+    exe_name: str,
+    command_name: str,
+    bundle_identifier: str,
+) -> None:
+    dist_dir = ROOT / "dist" / "mac"
+    dist_dir.mkdir(parents=True, exist_ok=True)
+
+    work_dir = WORK_ROOT / f"mac-{rid}"
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    payload_root = work_dir / "payload"
+    install_dir = payload_root / "usr" / "local" / "lib" / command_name
+    command_dir = payload_root / "usr" / "local" / "bin"
+    install_dir.mkdir(parents=True, exist_ok=True)
+    command_dir.mkdir(parents=True, exist_ok=True)
+    copy_publish_tree(publish_dir, install_dir)
+
+    exe_path = install_dir / exe_name
+    ensure_executable(exe_path)
+    (command_dir / command_name).symlink_to(Path("..") / "lib" / command_name / exe_name)
+
+    staging_dir = work_dir / "dmg"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    package_name = f"{cfg['ProductName']}-{version}-{rid}.pkg"
+    package_path = staging_dir / package_name
+    sh(
+        [
+            "pkgbuild",
+            "--root",
+            str(payload_root),
+            "--identifier",
+            f"{bundle_identifier}.cli",
+            "--version",
+            version,
+            "--install-location",
+            "/",
+            str(package_path),
+        ]
+    )
+
+    volume_name = mac_cfg.get("VolumeName") or cfg["ProductName"]
+    dmg_name = f"{cfg['ProductName']}-{version}-{rid}.dmg"
+    write_dmg(staging_dir, dist_dir, volume_name, dmg_name)
+    log(f"[mac] Command-line disk image ({rid}) written to {dist_dir / dmg_name}")
+
+
 def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
     if not IS_MACOS:
         raise PackagingError("macOS packaging requires running on macOS.")
@@ -815,6 +911,20 @@ def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
     bundle_identifier = mac_cfg.get("BundleIdentifier") or cfg.get("BundleIdentifier")
     if not bundle_identifier:
         raise PackagingError("Bundle identifier missing; set BundleIdentifier or Mac.BundleIdentifier.")
+
+    cli_name = command_line_name(cfg)
+    if cli_name:
+        package_macos_command_line(
+            cfg,
+            mac_cfg,
+            publish_dir,
+            version,
+            rid,
+            exe_name,
+            cli_name,
+            bundle_identifier,
+        )
+        return
 
     info_plist_template = ROOT / mac_cfg.get("InfoPlist", "Installer/templates/Info.plist")
     if not info_plist_template.exists():
@@ -909,28 +1019,9 @@ def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
 
     volname = mac_cfg.get("VolumeName") or app_name
     dmg_name = f"{cfg['ProductName']}-{version}-{rid}.dmg"
-    dmg_path = dist_dir / dmg_name
-    if dmg_path.exists():
-        dmg_path.unlink()
+    write_dmg(staging_dir, dist_dir, volname, dmg_name)
 
-    sh(
-        [
-            "hdiutil",
-            "create",
-            "-fs",
-            "HFS+",
-            "-srcfolder",
-            str(staging_dir),
-            "-volname",
-            volname,
-            "-ov",
-            "-format",
-            "UDZO",
-            str(dmg_path),
-        ]
-    )
-
-    log(f"[mac] Disk image ({rid}) written to {dmg_path}")
+    log(f"[mac] Disk image ({rid}) written to {dist_dir / dmg_name}")
 
 
 def main() -> None:

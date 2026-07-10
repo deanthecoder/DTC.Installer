@@ -20,6 +20,7 @@ At a high level, the tool:
 - Generates installers using platform‑native tools
 - Produces clean, versioned output in a predictable `dist/` layout
 - Persists all configuration in a single `packaging.json` file
+- Can install command-line applications onto the platform command path
 
 Once configured, packaging your app is a **one‑command operation**.
 
@@ -38,6 +39,8 @@ Once configured, packaging your app is a **one‑command operation**.
 - Generates a proper `.app` bundle with `Info.plist`
 - Automatically creates a bundle identifier if missing
 - Includes an `Applications` shortcut inside the DMG
+
+For command-line applications, the DMG contains a native `.pkg` that installs the payload beneath `/usr/local/lib` and exposes the command through `/usr/local/bin`.
 
 (Linux support is intentionally deferred but the structure allows it to be added cleanly.)
 
@@ -102,6 +105,20 @@ All behaviour is driven by a single config file.
 - `Project` – Relative path to the `.csproj` (optional if auto‑detected)
 - `Executable` – Base executable name (without `.exe`)
 - `Version` – Default package version; can be overridden for a single run with `--version`
+
+### Command-line applications
+
+Add a `CommandLine` section to install the application as a terminal command:
+
+```json
+"CommandLine": {
+  "Name": "myapp"
+}
+```
+
+On Windows, the installer adds its application directory to the current user's `PATH` and removes that entry on uninstall. On macOS, the DMG contains a `.pkg` that installs the application under `/usr/local/lib/myapp` and creates `/usr/local/bin/myapp`.
+
+GUI shortcuts and post-install launching are omitted when `CommandLine` is configured. Existing configurations without this section retain their current behavior.
 
 ### Windows section
 
