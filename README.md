@@ -226,8 +226,8 @@ on:
         required: true
         default: true
         type: boolean
-      create_tag:
-        description: "Create v-prefixed tag after successful builds."
+      create_release:
+        description: "Create a GitHub release after successful builds."
         required: true
         default: true
         type: boolean
@@ -241,7 +241,7 @@ jobs:
       version: ${{ inputs.version }}
       build_windows: ${{ inputs.build_windows }}
       build_macos: ${{ inputs.build_macos }}
-      create_tag: ${{ inputs.create_tag }}
+      create_release: ${{ inputs.create_release }}
 ```
 
 The reusable workflow checks out the caller repository with submodules enabled,
@@ -250,9 +250,11 @@ runs `Installer/pack.py --version ...`, and uploads:
 - `dist/win/*.exe` from a Windows runner.
 - `dist/mac/*.dmg` from a macOS runner.
 
-When `create_tag` is enabled, the workflow also creates an annotated
-`v<version>` tag after the selected installer builds pass. Existing tags are not
-overwritten.
+When `create_release` is enabled, the workflow downloads the build artifacts,
+creates the `v<version>` tag and a `<Repository> v<version>` GitHub Release with
+generated release notes, and attaches the `.exe` and `.dmg` installers. Existing
+tags are not overwritten. When disabled, the installers remain available only as
+workflow artifacts.
 
 ---
 

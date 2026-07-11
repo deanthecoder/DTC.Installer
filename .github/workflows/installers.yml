@@ -27,8 +27,8 @@ on:
         required: false
         default: 14
         type: number
-      create_tag:
-        description: "Create and push a v-prefixed git tag after successful builds."
+      create_release:
+        description: "Create a GitHub release with generated notes and installer files after successful builds."
         required: false
         default: true
         type: boolean
@@ -107,33 +107,44 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ inputs.artifact_retention_days }}
 
-  tag:
-    name: Tag release
+  release:
+    name: Create release
     needs:
       - windows
       - macos
-    if: ${{ always() && !cancelled() && inputs.create_tag && (inputs.build_windows || inputs.build_macos) && (needs.windows.result == 'success' || needs.windows.result == 'skipped') && (needs.macos.result == 'success' || needs.macos.result == 'skipped') }}
+    if: ${{ always() && !cancelled() && inputs.create_release && (inputs.build_windows || inputs.build_macos) && (needs.windows.result == 'success' || needs.windows.result == 'skipped') && (needs.macos.result == 'success' || needs.macos.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v7
         with:
-          fetch-depth: 0
-          submodules: false
+          pattern: ${{ inputs.artifact_name_prefix || github.event.repository.name }}-*-${{ inputs.version }}
+          path: release-assets
+          merge-multiple: true
 
-      - name: Create version tag
+      - name: Create GitHub release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          tag="v${{ inputs.version }}"
-          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+          tag="v${VERSION}"
+          repo_name="${GITHUB_REPOSITORY#*/}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
             echo "Tag ${tag} already exists."
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${tag}" -m "${tag}"
-          git push origin "${tag}"
+          mapfile -t installers < <(find release-assets -type f \( -name '*.exe' -o -name '*.dmg' \) -print | sort)
+          if [ "${#installers[@]}" -eq 0 ]; then
+            echo "No installer files were downloaded."
+            exit 1
+          fi
+          gh release create "${tag}" "${installers[@]}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "${repo_name} ${tag}" \
+            --generate-notes
