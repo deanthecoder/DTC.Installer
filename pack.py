@@ -152,7 +152,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="VERSION",
         help="Override the package version from packaging.json for this run.",
     )
+    parser.add_argument("--init", action="store_true", help="Create packaging.json and a GitHub workflow without building.")
+    parser.add_argument("--project", help="Project path, required with --init.")
+    parser.add_argument("--platform", choices=("windows", "macos", "both"), help="Platforms for --init (default: windows).")
     args = parser.parse_args(argv)
+    if args.init and not args.project:
+        parser.error("--init requires --project, e.g. App/App.csproj")
+    if not args.init and (args.project or args.platform):
+        parser.error("--project and --platform are only supported with --init")
     if args.version:
         try:
             args.version = validate_version(args.version)
@@ -446,8 +453,8 @@ def ensure_win_startup_task(cfg: dict, updates: list[str]) -> None:
     updates.append("Added Win.ShowRunOnStartupTask (default false)")
 
 
-def default_cfg() -> dict:
-    project = first_csproj()
+def default_cfg(project: Path | None = None, version: str | None = None) -> dict:
+    project = project or first_csproj()
     if not project:
         raise PackagingError("Could not locate a .csproj file.")
 
@@ -484,7 +491,7 @@ def default_cfg() -> dict:
         "BundleIdentifier": bundle_id,
         "Executable": project.stem,
         "Project": proj_rel,
-        "Version": validate_version(meta.get("Version", DEFAULT_VERSION)),
+        "Version": validate_version(version or meta.get("Version", DEFAULT_VERSION)),
         "Win": {
             "InnoScript": "Installer/templates/inno.iss",
             "IconIco": (icon_ico.relative_to(ROOT).as_posix() if icon_ico.exists() else ""),
@@ -500,6 +507,39 @@ def default_cfg() -> dict:
         },
     }
     return cfg
+
+
+def initialize(project_name: str, platform: str, version: str | None) -> None:
+    """Create the standard consumer files without modifying existing setup or project metadata."""
+    workflow = ROOT / ".github" / "workflows" / "installers.yml"
+    for path in (CFG_PATH, workflow):
+        if path.exists():
+            raise PackagingError(f"Refusing to overwrite {path}. Edit the existing setup instead.")
+    project = (ROOT / project_name).resolve()
+    if not project.is_relative_to(ROOT.resolve()) or not project.is_file() or project.suffix != ".csproj":
+        raise PackagingError("--project must name a .csproj inside the repository.")
+    project_xml = ET.parse(project).getroot()
+    if not project_xml.get("Sdk") and not any(node.tag == "Sdk" for node in project_xml):
+        raise PackagingError("The standard setup requires an SDK-style project supporting dotnet publish.")
+    cfg = default_cfg(project, version)
+    if platform == "windows":
+        cfg["Mac"] = None
+    elif platform == "macos":
+        cfg["Win"] = None
+    cfg["PublishArgs"] = ["-c", "Release", "--self-contained", "true"]
+    template = Path(__file__).resolve().parent / "templates" / "installers.yml"
+    workflow_text = template.read_text(encoding="utf-8")
+    for token, value in {
+        "Version": cfg["Version"],
+        "BuildWindows": str(platform != "macos").lower(),
+        "BuildMacOS": str(platform != "windows").lower(),
+    }.items():
+        workflow_text = workflow_text.replace("{{" + token + "}}", value)
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    CFG_PATH.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    workflow.write_text(workflow_text, encoding="utf-8")
+    log("[init] Created packaging.json and .github/workflows/installers.yml. No build was run.")
+    log("[init] Review metadata, commit both files and the Installer submodule, then dispatch Installers on GitHub.")
 
 
 def ensure_cfg() -> tuple[dict, bool]:
@@ -1051,6 +1091,9 @@ def package_macos(cfg: dict, publish_dir: Path, version: str, rid: str) -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.init:
+        initialize(args.project, args.platform or "windows", args.version)
+        return
     cfg, created = ensure_cfg()
     if args.version:
         cfg["Version"] = args.version

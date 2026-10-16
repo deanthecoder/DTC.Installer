@@ -1,0 +1,26 @@
+name: Installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Installer version, e.g. 1.1 (without v)"
+        required: true
+        default: "{{Version}}"
+        type: string
+      create_release:
+        description: "Create a version tag and GitHub release after the installer builds."
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  installers:
+    permissions:
+      contents: write
+    uses: deanthecoder/DTC.Installer/.github/workflows/installers.yml@main
+    with:
+      version: ${{ inputs.version }}
+      build_windows: {{BuildWindows}}
+      build_macos: {{BuildMacOS}}
+      create_release: ${{ inputs.create_release }}

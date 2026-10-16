@@ -65,32 +65,41 @@ For command-line applications, the DMG contains a native `.pkg` that installs th
 
    *(Or copy it directly into an `Installer/` folder.)*
 
-2. From your repo root, run:
+2. Create the standard configuration and GitHub workflow together:
 
    ```bash
-   python Installer/pack.py
+   python Installer/pack.py --init --project MyApp/MyApp.csproj --platform windows --version 1.1
    ```
 
-3. On first run, the script:
-   - Scans for a `.csproj`
-   - Infers sensible defaults (product name, company, bundle ID, etc.)
-   - Writes a `packaging.json`
-   - Exits without building
+   Choose `windows`, `macos`, or `both` (`windows` is the default). The explicit
+   project avoids selecting a test project or submodule. SDK-style projects are
+   required; legacy projects need migration or a custom build integration.
 
-4. Review and tweak `packaging.json` as needed.
+3. Review `packaging.json` (company, product, icon and startup options), then
+   commit it, `.github/workflows/installers.yml`, `.gitmodules`, and the Installer
+   submodule. Add `dist/` to your repository's `.gitignore`.
 
-5. Run the same command again to build installers:
+4. Run **Installers** from GitHub Actions with a version such as `1.1`.
+   The shared workflow builds the selected platforms and optionally creates
+   release `v1.1` with installers attached. Do not pre-create the tag.
 
-   ```bash
-   python Installer/pack.py
-   ```
+For a local build:
 
-   To build with a one-off version without editing `packaging.json`, pass it on
-   the command line:
+```bash
+python Installer/pack.py --version 1.1
+```
 
-   ```bash
-   python Installer/pack.py --version 1.2
-   ```
+`--init` never builds, changes project metadata, or overwrites existing setup
+files. It references the shared Inno/Info.plist templates directly. Do not copy
+these into consumer repos unless custom installer behavior is required.
+Windows defaults to Program Files with administrator privileges; publishing is
+Release and self-contained. The normal build stamps the application version.
+Keep the generated Windows App ID stable across releases.
+
+Existing repositories can set `Win.InnoScript` to
+`Installer/templates/inno.iss` to adopt the shared defaults. Custom scripts
+remain supported. Running without `--init` retains the original first-run
+configuration generation behavior.
 
 ---
 
