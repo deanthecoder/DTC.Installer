@@ -7,6 +7,13 @@ on:
         description: "Installer version, e.g. 0.1"
         required: true
         type: string
+      dotnet_version:
+        description: ".NET SDK version(s) to install, separated by newlines."
+        required: false
+        default: |
+          8.0.x
+          9.0.x
+        type: string
       build_windows:
         description: "Build the Windows/Inno Setup installer."
         required: false
@@ -48,9 +55,7 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: |
-            8.0.x
-            9.0.x
+          dotnet-version: ${{ inputs.dotnet_version }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -87,9 +92,7 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: |
-            8.0.x
-            9.0.x
+          dotnet-version: ${{ inputs.dotnet_version }}
 
       - name: Set up Python
         uses: actions/setup-python@v6

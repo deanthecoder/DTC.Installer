@@ -253,6 +253,10 @@ jobs:
       create_release: ${{ inputs.create_release }}
 ```
 
+Set `dotnet_version: 10.0.x` in the caller's `with` block to select the .NET 10 SDK.
+The optional input also accepts newline-separated versions. When omitted, it
+preserves the existing SDK defaults: `8.0.x` and `9.0.x`, on both platforms.
+
 The reusable workflow checks out the caller repository with submodules enabled,
 runs `Installer/pack.py --version ...`, and uploads:
 
